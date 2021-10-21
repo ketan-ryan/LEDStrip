@@ -4,9 +4,11 @@
 
 
 // Pattern types supported:
-enum  pattern { NONE, RAINBOW_CYCLE, FADE };
+enum  pattern { NONE, RAINBOW_CYCLE, RAINBOW_FADE, FADE, MUSIC_LED_HUE };
 // Patern directions supported:
 enum  direction { FORWARD, REVERSE };
+
+#define smoothness 5
 
 // NeoPattern Class - derived from the Adafruit_NeoPixel class
 class NeoPatterns : public Adafruit_NeoPixel
@@ -21,6 +23,7 @@ class NeoPatterns : public Adafruit_NeoPixel
     unsigned long lastUpdate; // last update of position
 
     uint8_t brightness;
+    uint8_t numLeds;
 
     uint32_t Color1, Color2;  // What colors are in use
     uint16_t TotalSteps;  // total number of steps in the pattern
@@ -48,6 +51,12 @@ class NeoPatterns : public Adafruit_NeoPixel
                     break;
                 case FADE:
                     FadeUpdate();
+                    break;
+                case RAINBOW_FADE:
+                    RainbowFadeUpdate();
+                    break;
+                case MUSIC_LED_HUE:
+                    MusicLedHueUpdate();
                     break;
                 default:
                     break;
@@ -119,6 +128,65 @@ class NeoPatterns : public Adafruit_NeoPixel
         }
         show();
         Increment();
+    }
+
+    // Init rainbow fade
+    void RainbowFade(uint8_t br) {
+      ActivePattern = RAINBOW_FADE;
+      Index = 0;
+      TotalSteps = 16383;
+      Direction = FORWARD;
+      brightness = br;
+    }
+
+    // Update rainbow fade
+    void RainbowFadeUpdate() {
+      ColorSet(gamma32(ColorHSV(map(Index, 0, TotalSteps, 0, 65535), 255, brightness)));
+      show();
+      Increment();  
+    }
+
+    // Init music reactivity changing hue and amount of illuminated LEDs
+    void MusicLedHue(uint8_t color1) {
+      ActivePattern = MUSIC_LED_HUE;
+      Color1 = color1;
+      Index = 0;
+      TotalSteps = 65535;
+    }
+
+    // Update strip leds, hue to music
+    void MusicLedHueUpdate() {
+      // Turn on number of LEDs respective to how loud it is
+      for(int i = 0; i < numPixels(); i++) {
+        if (numLeds > 1 && i <= numLeds) {
+          // Set HSV value of current pixel, with hue constantly updating and based on position in strip
+          setPixelColor(i, gamma32(ColorHSV(map(i + Index, 0, numPixels(), 0, 65535), 255, brightness)));
+        }
+        else
+          setPixelColor(i, Color(0, 0, 0)); 
+     }
+     // Display strip
+     show();
+
+     // Rate at which hue updates depends on volume level
+     int rateOfChange = 10;
+     // The louder the volume, the faster the hue updates
+     if(numLeds <= 20)
+       rateOfChange = 50;
+     else if(numLeds > 20 && numLeds <= 40)
+       rateOfChange = 35;
+     else if(numLeds > 40 && numLeds <= 60)
+       rateOfChange = 25;
+     else if(numLeds > 60 && numLeds <= 80)
+       rateOfChange = 10;
+     else if(numLeds > 80 && numLeds <= 90)
+       rateOfChange = 5;
+     else if(numLeds > 90)
+       rateOfChange = 1;
+       
+     if(millis() % rateOfChange == 0) {
+       Increment();
+     }
     }
     
     // Initialize for a Fade
@@ -206,24 +274,24 @@ class NeoPatterns : public Adafruit_NeoPixel
     }
 };
 
-void updatingComplete();
-
+# define SENS 25
 #define BACKLIGHT 13
 #define NUM_LEDS 100
+#define ENVELOPE A1
 #define LED_PIN 6
 #define IR_PIN 8
 
-//Define LCD pins
-//Parameters: (RS, E, D4, D5, D6, D7)
+// Define LCD pins
+// Parameters: (RS, E, D4, D5, D6, D7)
 LiquidCrystal lcd(12, 7, 5, 4, 3, 2);  
 
 // Define some NeoPatterns for the two rings and the stick
-//  as well as some completion routines
-NeoPatterns strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800, &updatingComplete);//, &Ring1Complete);
+// as well as some completion routines
+NeoPatterns strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800, NULL);//, &Ring1Complete);
 
 //Initialize IR Receiver
 IRrecv irrecv(IR_PIN);
-//Get results
+// Get results
 decode_results results;
 
 //If the backlight is turned on
@@ -233,18 +301,18 @@ bool powerOn = true;
 String codes[22] = {"PWR", "VL+", "FNC", "LFT", "PP ", "RGT", "DWN", "VL-", "UP ",
 "0  ", "EQ ", "ST ", "1  ", "2  ", "3  ", "4  ", "5  ", "6  ", "7  ", "8  ", "9  "};
 
-//Possible  Strip modes
 /**
-* 0: Red
-* 1: Grn
-* 2: Blu
-* 3: Cyn
-* 4: Rainbow fade
-* 5: Rainbow chase
-* 6: Music bar fill, rainbow
-* 7: Music bar fill, red
-* 8: Adjust hue, solid
-* 9: Adjust hue, music
+ * Possible strip modes
+ * 0: Red
+ * 1: Grn
+ * 2: Blu
+ * 3: Wht
+ * 4: Rainbow fade
+ * 5: Rainbow chase
+ * 6: Music bar fill, rainbow
+ * 7: Music bar fill, red
+ * 8: Adjust hue, solid
+ * 9: Adjust hue, music
 **/
 unsigned short modes[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 
@@ -293,11 +361,19 @@ void setup()
 void loop()
 {
   digitalWrite(BACKLIGHT, powerOn);
+
+  // Get input from sound card, manipulate it to fit our number of leds
+  int input = analogRead(ENVELOPE);
+  unsigned int reading = (input * input) / SENS;
+  strip.numLeds = (reading);
+
+  // Store index before receiving a signal
+  int tempI  = strip.Index;
   
   // If we get something from the receiver
   if(irrecv.decode()) {
     // Any signal received during a dynamically updating pattern will be malformed, so we need a second input
-    if(mode == 5) {
+    if(isModeDynamic()) {
       modeChange = true;  
     }
     // Print input
@@ -306,7 +382,11 @@ void loop()
   
     // Do the appropriate action depending on the pressed button
     performAction(id);
-  
+
+    // Restore signal after updating mode
+    if(id != mode)
+      strip.Index = tempI;
+    
     // Resume receiving input
     irrecv.resume();
   }
@@ -321,7 +401,7 @@ void loop()
   }
 
   // Update strip if dynamic and user has not requested an input
-  if(powerOn && !modeChange && mode >= 4 && mode <= 7) {
+  if(powerOn && !modeChange && isModeDynamic()) {
     strip.brightness = stripBrightness;
     strip.Update();
   }
@@ -338,72 +418,28 @@ void codeToStr(long hexVal) {
     case 0:
       Serial.println("Repeat");
       break;
-    case 0xBA45FF00:
-      id = 0;
-      break;
-    case 0xB946FF00:
-      id = 1;
-      break;
-    case 0xB847FF00:
-      id = 2;
-      break;
-    case 0xBB44FF00:
-      id = 3;
-      break;
-    case 0xBF40FF00:
-      id = 4;
-      break;
-    case 0xBC43FF00:
-      id = 5;
-      break;
-    case 0xF807FF00:
-      id = 6;
-      break;
-    case 0xEA15FF00:
-      id = 7;
-      break;
-    case 0xF609FF00:
-      id = 8;
-      break;
-    case 0xE916FF00:
-      id = 9;
-      break;
-    case 0xE619FF00:
-      id = 10;
-      break;
-    case 0xF20DFF00:
-      id = 11;
-      break;
-    case 0xF30CFF00:
-      id = 12;
-      break;
-    case 0xE718FF00:
-      id = 13;
-      break;
-    case 0xA15EFF00:
-      id = 14;
-      break;
-    case 0xF708FF00:
-      id = 15;
-      break;
-    case 0xE31CFF00:
-      id = 16;
-      break;
-    case 0xA55AFF00:
-      id = 17;
-      break;
-    case 0xBD42FF00:
-      id = 18;
-      break;
-    case 0xAD52FF00:
-      id = 19;
-      break;
-    case 0xB54AFF00:
-      id = 20;
-      break;
-    default:
-      id = -1;
-      break;
+    case 0xBA45FF00: id = 0; break;
+    case 0xB946FF00: id = 1; break;
+    case 0xB847FF00: id = 2; break;
+    case 0xBB44FF00: id = 3; break;
+    case 0xBF40FF00: id = 4; break;
+    case 0xBC43FF00: id = 5; break;
+    case 0xF807FF00: id = 6; break;
+    case 0xEA15FF00: id = 7; break;
+    case 0xF609FF00: id = 8; break;
+    case 0xE916FF00: id = 9; break;
+    case 0xE619FF00: id = 10; break;
+    case 0xF20DFF00: id = 11; break;
+    case 0xF30CFF00: id = 12; break;
+    case 0xE718FF00: id = 13; break;
+    case 0xA15EFF00: id = 14; break;
+    case 0xF708FF00: id = 15;break;
+    case 0xE31CFF00: id = 16; break;
+    case 0xA55AFF00:id = 17; break;
+    case 0xBD42FF00:id = 18; break;
+    case 0xAD52FF00: id = 19; break;
+    case 0xB54AFF00:id = 20; break;
+    default: id = -1; break;
     }
 
     lcd.setCursor(7, 1);
@@ -505,35 +541,53 @@ void performAction(int idx) {
     }
 }
 
+/**
+ * Update the mode
+ * 
+ */
 void updateMode() {
   switch(mode) {
     // Solid Red
     case 0:
       strip.ColorSet(strip.Color(stripBrightness, 0, 0));
+      strip.ActivePattern = NONE;
       break;
     // Solid Green
     case 1:
       strip.ColorSet(strip.Color(0, stripBrightness, 0));
+      strip.ActivePattern = NONE;
       break;
     // Solid Blue
     case 2:
       strip.ColorSet(strip.Color(0, 0, stripBrightness));
+      strip.ActivePattern = NONE;
       break;
     // Solid White
     case 3:
-      strip.ColorSet(strip.gamma32(strip.ColorHSV(map(hue, 0, 255, 0, 65535), 0, stripBrightness)));
+     strip.ColorSet(strip.gamma32(strip.ColorHSV(map(hue, 0, 255, 0, 65535), 0, stripBrightness)));
+      strip.ActivePattern = NONE;
       break;
-//    // Rainbow Fade
-//    case 4:
-//      strip.ActivePattern = FADE;
-//      break;
+    // Rainbow Fade
+    case 4:
+      strip.RainbowFade(stripBrightness);
+      strip.ActivePattern = RAINBOW_FADE;
+      break;
     // Rainbow Cycle
     case 5:
       strip.RainbowCycle(100, stripBrightness);
+      strip.ActivePattern = RAINBOW_CYCLE;
+      break;
+    // Music num leds
+    case 6:
+      strip.MusicLedHue(strip.Color(stripBrightness, 0, 0));
+      strip.ActivePattern = MUSIC_LED_HUE;
+      strip.Interval = 0;
       break;
     // Solid Hue
     case 8:
       strip.ColorSet(strip.gamma32(strip.ColorHSV(map(hue, 0, 255, 0, 65535), 255, stripBrightness)));
+      strip.ActivePattern = NONE;
+      break;
     default:
       break;
   }
@@ -568,6 +622,18 @@ void setupLCD() {
 }
 
 /**
+ * Simple function to determine whether a mode needs constant updating
+ * Returns true when:
+ * Theme is default, modes are 4 - 7
+ * Theme is Halloween, modes are
+ * Theme is Xmas, modes are
+ * @returns whether a mode needs constant updating
+ */
+bool isModeDynamic() {
+  return (mode >= 4 || mode <= 7);  
+}
+
+/**
 * Clear all LEDs
 **/
 void wipe() { 
@@ -576,31 +642,3 @@ void wipe() {
   }
   strip.show();
 }
-//------------------------------------------------------------
-//Completion Routines - get called on completion of a pattern
-//------------------------------------------------------------
-
-void updatingComplete() {
-//  if(modeChange) {
-//    Serial.println(strip.ActivePattern);
-//    strip.ActivePattern = NONE;
-//    mode = 0;
-//    updateMode();  
-//  }  
-}
-
-// Ring1 Completion Callback
-//void Ring1Complete()
-//{
-//    if (digitalRead(9) == LOW)  // Button #2 pressed
-//    {
-//        // Alternate color-wipe patterns with Ring2
-//        Ring2.Interval = 40;
-//        Ring1.Color1 = Ring1.Wheel(random(255));
-//        Ring1.Interval = 20000;
-//    }
-//    else  // Retrn to normal
-//    {
-//      Ring1.Reverse();
-//    }
-//}
