@@ -8,8 +8,9 @@
 * Brightness adjustment
 * Hue shift mode
 * Rainbow Cycle
-* TODO: Rainbow Fade
-* TODO: Music Reactivity
+* Rainbow Fade
+* Music Reactivity
+* TODO: Pulses with music reactivity
 * Power off/on with remote
 
 ### Screen shows Mode, Input, Brightness, Hue
