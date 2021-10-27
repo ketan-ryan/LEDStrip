@@ -1,43 +1,58 @@
 #include <Adafruit_NeoPixel.h>
 #include <LiquidCrystal.h>
 #include <IRremote.h>
+#include <stdlib.h>
+#include <stdio.h>
 
+
+typedef struct pulse {
+  int position;
+  int step = 0;
+  int center = 2000;
+  int out1 = 0;
+  int out2 = 0;
+} PulseStruct;
 
 // Pattern types supported:
-enum  pattern { NONE, RAINBOW_CYCLE, RAINBOW_FADE, FADE, MUSIC_LED_HUE };
+enum pattern { NONE, RAINBOW_CYCLE, RAINBOW_FADE, FADE, MUSIC_LED_HUE, PULSE, MUSIC_FILL };
 // Patern directions supported:
-enum  direction { FORWARD, REVERSE };
-
-#define smoothness 5
+enum direction { FORWARD, REVERSE };
 
 // NeoPattern Class - derived from the Adafruit_NeoPixel class
 class NeoPatterns : public Adafruit_NeoPixel
 {
+    private:
+    const int num_pulses = 10;
+    PulseStruct *pulses[10] = {NULL};
     public:
 
-    // Member Variables:  
+    // Member Variables:
     pattern  ActivePattern;  // which pattern is running
     direction Direction;     // direction to run the pattern
-    
+
     unsigned long Interval;   // milliseconds between updates
     unsigned long lastUpdate; // last update of position
 
-    uint8_t brightness;
-    uint8_t numLeds;
+    uint8_t brightness;   // strip brightness
+    uint8_t numLeds;    // num leds to turn on with audio
+
+    long lColor1;   // signed color 1
+    long lColor2;   // signed color 2
+    long colorPad;    // enough room for a color +- some padding
 
     uint32_t Color1, Color2;  // What colors are in use
     uint16_t TotalSteps;  // total number of steps in the pattern
     uint16_t Index;  // current step within the pattern
-    
+
     void (*OnComplete)();  // Callback on completion of pattern
-    
+
     // Constructor - calls base-class constructor to initialize strip
     NeoPatterns(uint16_t pixels, uint8_t pin, uint8_t type, void (*callback)())
     :Adafruit_NeoPixel(pixels, pin, type)
     {
         OnComplete = callback;
     }
-    
+
     // Update the pattern
     void Update()
     {
@@ -58,12 +73,18 @@ class NeoPatterns : public Adafruit_NeoPixel
                 case MUSIC_LED_HUE:
                     MusicLedHueUpdate();
                     break;
+                case PULSE:
+                    PulseUpdate();
+                    break;
+                case MUSIC_FILL:
+                    MusicFillUpdate();
+                    break;
                 default:
                     break;
             }
         }
     }
-  
+
     // Increment the Index and reset at the end
     void Increment()
     {
@@ -92,7 +113,7 @@ class NeoPatterns : public Adafruit_NeoPixel
             }
         }
     }
-    
+
     // Reverse pattern direction
     void Reverse()
     {
@@ -107,7 +128,7 @@ class NeoPatterns : public Adafruit_NeoPixel
             Index = 0;
         }
     }
-    
+
     // Initialize for a RainbowCycle
     void RainbowCycle(uint8_t interval, uint8_t br, direction dir = FORWARD)
     {
@@ -118,7 +139,7 @@ class NeoPatterns : public Adafruit_NeoPixel
         Direction = dir;
         brightness = br;
     }
-    
+
     // Update the Rainbow Cycle Pattern
     void RainbowCycleUpdate()
     {
@@ -143,15 +164,15 @@ class NeoPatterns : public Adafruit_NeoPixel
     void RainbowFadeUpdate() {
       ColorSet(gamma32(ColorHSV(map(Index, 0, TotalSteps, 0, 65535), 255, brightness)));
       show();
-      Increment();  
+      Increment();
     }
 
     // Init music reactivity changing hue and amount of illuminated LEDs
-    void MusicLedHue(uint8_t color1) {
+    void MusicLedHue() {
       ActivePattern = MUSIC_LED_HUE;
-      Color1 = color1;
       Index = 0;
       TotalSteps = 65535;
+      Interval = 0;
     }
 
     // Update strip leds, hue to music
@@ -163,7 +184,7 @@ class NeoPatterns : public Adafruit_NeoPixel
           setPixelColor(i, gamma32(ColorHSV(map(i + Index, 0, numPixels(), 0, 65535), 255, brightness)));
         }
         else
-          setPixelColor(i, Color(0, 0, 0)); 
+          setPixelColor(i, Color(0, 0, 0));
      }
      // Display strip
      show();
@@ -183,12 +204,136 @@ class NeoPatterns : public Adafruit_NeoPixel
        rateOfChange = 5;
      else if(numLeds > 90)
        rateOfChange = 1;
-       
-     if(millis() % rateOfChange == 0) {
-       Increment();
-     }
+
+      if(millis() % rateOfChange == 0) {
+        Increment();
+      }
     }
-    
+
+    void Pulse() {
+      ActivePattern = PULSE;
+      Index = 0;
+      TotalSteps = 7;
+      Color1 = 65535;
+      // lColor1 = 21844;
+      // colorPad = lColor1;
+      // lColor2 = lColor1;
+    }
+
+    void PulseUpdate() {
+      // 00000 - red
+      // 10922 - magenta
+      // 21844 - blue
+      // 32768 - cyan
+      // 43688 - green
+      // 54610 - yellow
+      // 65535 - red
+      for(int i = 0; i < numPixels(); i++) {
+        setPixelColor(i, ColorHSV(Color1, 255, brightness));
+      }
+
+      // If struct at index n is empty
+      // malloc some space for it
+      // n is determined by volume level
+
+      if(pulses[0] == NULL) {
+        pulses[0] = malloc(sizeof(PulseStruct));
+        pulses[0]->position = 5;
+        //setPixelColor(5, ColorHSV(Color1 - 10000, 255, brightness));
+      }
+      else{
+        //setPixelColor(5, ColorHSV(Color1 + 2000, 255, brightness));
+        pulseLed(pulses[0], 0);
+      }
+      show();
+      if(millis() % 100 == 0)
+        Increment();
+    }
+
+    void pulseLed(PulseStruct *pulse, int idx) {
+      // 0 - center 2000
+      // 1 - 1 out, center 1500
+      // 2 - 2 out, center 1000
+      // 3 - 2 at 3/4 bright, center 500
+      // 4 - 2 at 1/2 bright, center off
+      // 5 - all off
+      int s = pulse->step;
+      if(s > 0 && s < 5) {
+        pulse->center -= 500;
+        if(s == 1)
+          pulse->out1 = 2000;
+        if(s == 2)
+          pulse->out2 = 2000;
+        if(s > 1)
+          pulse->out1 -= 500;
+      }
+      if(s > 2)
+        pulse->out2 -= 500;
+
+     setPixelColor(pulse->position - 2, ColorHSV(Color1 + pulse->out2, 255, brightness));
+     setPixelColor(pulse->position - 1, ColorHSV(Color1 + pulse->out1, 255, brightness));
+     setPixelColor(pulse->position, ColorHSV(Color1 + pulse->center, 255, brightness));
+     setPixelColor(pulse->position + 1, ColorHSV(Color1 + pulse->out1, 255, brightness));
+     setPixelColor(pulse->position + 2, ColorHSV(Color1 + pulse->out2, 255, brightness));
+
+      pulse->step++;
+
+      if(pulse->step == 5) {
+        free(pulse);
+        pulses[idx] = NULL;
+      }
+    }
+
+    /**
+     * Given a hue, updates it circularly
+     * @param color a reference to the color to update
+     * @param cPad the initial color. has room for addition of a cap
+     * @param cap how far to update the color before switching directions
+     * @param stepLen the factor to update the hue by
+     * @param dir a reference to the current direction we're moving
+     **/
+    void updateHue(long &color, long cPad, int32_t cap, int stepLen, bool startedFwd) {
+      Serial.println(color);
+      // Moving in the forward direction
+      if(Direction == FORWARD) {
+        // Increment color by stepLen until it overflows the cap
+        color += stepLen;
+        // At which point reverse direction
+        if(color >= (startedFwd ? cPad + cap : cPad))
+          Direction = REVERSE;
+      }
+      // Moving in the backwards direction
+      else {
+        // Decrement color by stepLen until it reaches the original colr
+        color -= stepLen;
+        // At which point reverse direction
+        if(color <= (startedFwd ? cPad : cPad - cap))
+          Direction = FORWARD;
+      }
+    }
+
+    void MusicFill(uint32_t h) {
+      ActivePattern = MUSIC_FILL;
+      Index = 0;
+      TotalSteps = 65535;
+      Interval = 0;
+      Color2 = h;
+    }
+
+    void MusicFillUpdate() {
+      // Turn on number of LEDs respective to how loud it is
+      for(int i = 0; i < numPixels(); i++) {
+        if (numLeds > 1 && i <= numLeds) {
+          // Set HSV value of current pixel, with hue determined by user input
+          setPixelColor(i, gamma32(ColorHSV(map(Color2, 0, 255, 0, 65535), 255, brightness)));
+        }
+        else
+          setPixelColor(i, Color(0, 0, 0));
+     }
+     // Display strip
+     show();
+    }
+
     // Initialize for a Fade
     void Fade(uint32_t color1, uint32_t color2, uint16_t steps, uint8_t interval, direction dir = FORWARD)
     {
@@ -200,7 +345,7 @@ class NeoPatterns : public Adafruit_NeoPixel
         Index = 0;
         Direction = dir;
     }
-    
+
     // Update the Fade Pattern
     void FadeUpdate()
     {
@@ -209,12 +354,12 @@ class NeoPatterns : public Adafruit_NeoPixel
         uint8_t red = ((Red(Color1) * (TotalSteps - Index)) + (Red(Color2) * Index)) / TotalSteps;
         uint8_t green = ((Green(Color1) * (TotalSteps - Index)) + (Green(Color2) * Index)) / TotalSteps;
         uint8_t blue = ((Blue(Color1) * (TotalSteps - Index)) + (Blue(Color2) * Index)) / TotalSteps;
-        
+
         ColorSet(Color(red, green, blue));
         show();
         Increment();
     }
-   
+
     // Calculate 50% dimmed version of a color (used by ScannerUpdate)
     uint32_t DimColor(uint32_t color)
     {
@@ -250,7 +395,7 @@ class NeoPatterns : public Adafruit_NeoPixel
     {
         return color & 0xFF;
     }
-    
+
     // Input a value 0 to 255 to get a color value.
     // The colours are a transition r - g - b - back to r.
     uint32_t Wheel(byte WheelPos)
@@ -274,7 +419,7 @@ class NeoPatterns : public Adafruit_NeoPixel
     }
 };
 
-# define SENS 25
+#define SENS 25
 #define BACKLIGHT 13
 #define NUM_LEDS 100
 #define ENVELOPE A1
@@ -283,7 +428,7 @@ class NeoPatterns : public Adafruit_NeoPixel
 
 // Define LCD pins
 // Parameters: (RS, E, D4, D5, D6, D7)
-LiquidCrystal lcd(12, 7, 5, 4, 3, 2);  
+LiquidCrystal lcd(12, 7, 5, 4, 3, 2);
 
 // Define some NeoPatterns for the two rings and the stick
 // as well as some completion routines
@@ -350,7 +495,7 @@ void setup()
   // Start LCD screen
   lcd.begin(16,2);
   setupLCD();
-  
+
   // Initialize all the pixelStrips
   strip.begin();
   // Start on default mode 0
@@ -363,35 +508,41 @@ void loop()
   digitalWrite(BACKLIGHT, powerOn);
 
   // Get input from sound card, manipulate it to fit our number of leds
-  int input = analogRead(ENVELOPE);
-  unsigned int reading = (input * input) / SENS;
-  strip.numLeds = (reading);
+  if(mode == 6 || mode == 7 || mode == 9) {
+    int input = analogRead(ENVELOPE);
+    unsigned int reading = (input * input) / SENS;
+    strip.numLeds = (reading);
+  }
+
+  if(mode == 9)
+    strip.Color2 = hue;
 
   // Store index before receiving a signal
-  int tempI  = strip.Index;
-  
+  int tempI = strip.Index;
+
   // If we get something from the receiver
   if(irrecv.decode()) {
     // Any signal received during a dynamically updating pattern will be malformed, so we need a second input
     if(isModeDynamic()) {
-      modeChange = true;  
+      modeChange = true;
     }
+
     // Print input
     if(powerOn)
       codeToStr(irrecv.decodedIRData.decodedRawData);
-  
+
     // Do the appropriate action depending on the pressed button
     performAction(id);
 
     // Restore signal after updating mode
     if(id != mode)
       strip.Index = tempI;
-    
+
     // Resume receiving input
     irrecv.resume();
   }
 
-  // Give users one second to input another IR signal 
+  // Give users one second to input another IR signal
   unsigned long currentMillis = millis();
   if(modeChange) {
     if(currentMillis - previousMillis >= pause) {
@@ -470,7 +621,7 @@ void performAction(int idx) {
           strip.show();
         }
     }
-    if(powerOn) { 
+    if(powerOn) {
       //Hue shifting
       if(mode == 8 || mode == 9) {
         //Hue shifting left
@@ -484,7 +635,7 @@ void performAction(int idx) {
         else if(idx == 5) {
           if (hue < 255)
             hue++;
-          else 
+          else
             hue = 0;
         }
       }
@@ -508,7 +659,7 @@ void performAction(int idx) {
           stripBrightness -= 10;
         else if(stripBrightness - 10 <= 0)
           stripBrightness = 255;
-      } 
+      }
       // Up button pressed
       else if (idx == 8) {
         if (mode == 9)
@@ -523,7 +674,7 @@ void performAction(int idx) {
         else
           mode = idx - 11;
       }
-      
+
       //Print mode
       lcd.setCursor(6, 0);
       lcd.print(mode);
@@ -536,14 +687,14 @@ void performAction(int idx) {
       snprintf(h, sizeof(h), "%03d", hue);
       lcd.setCursor(13, 1);
       lcd.print(hue);
-      
+
       updateMode();
     }
 }
 
 /**
  * Update the mode
- * 
+ *
  */
 void updateMode() {
   switch(mode) {
@@ -579,14 +730,23 @@ void updateMode() {
       break;
     // Music num leds
     case 6:
-      strip.MusicLedHue(strip.Color(stripBrightness, 0, 0));
+      strip.MusicLedHue();
       strip.ActivePattern = MUSIC_LED_HUE;
       strip.Interval = 0;
+      break;
+    // music pulse
+    case 7:
+      strip.Pulse();
+      strip.ActivePattern = PULSE;
       break;
     // Solid Hue
     case 8:
       strip.ColorSet(strip.gamma32(strip.ColorHSV(map(hue, 0, 255, 0, 65535), 255, stripBrightness)));
       strip.ActivePattern = NONE;
+      break;
+    case 9:
+      strip.MusicFill(hue);
+      strip.ActivePattern = MUSIC_FILL;
       break;
     default:
       break;
@@ -608,7 +768,7 @@ void setupLCD() {
 
   lcd.setCursor(0, 0);
   lcd.print("Mode:    Br: ");
-  
+
   lcd.setCursor(6, 0);
   lcd.print(mode);
 
@@ -616,7 +776,7 @@ void setupLCD() {
   lcd.print("Input:");
 
   lcd.setCursor(11, 1);
-  lcd.print("H:");
+  lcd.print("H: ");
   lcd.setCursor(13, 1);
   lcd.print(hue);
 }
@@ -624,21 +784,21 @@ void setupLCD() {
 /**
  * Simple function to determine whether a mode needs constant updating
  * Returns true when:
- * Theme is default, modes are 4 - 7
+ * Theme is default, modes are 4 - 9
  * Theme is Halloween, modes are
  * Theme is Xmas, modes are
  * @returns whether a mode needs constant updating
  */
 bool isModeDynamic() {
-  return (mode >= 4 || mode <= 7);  
+  return (mode >= 4 && mode <= 7 || mode == 9);
 }
 
 /**
 * Clear all LEDs
 **/
-void wipe() { 
+void wipe() {
   for(int i = 0; i < strip.numPixels(); i++) {
-    strip.setPixelColor(i, strip.Color(0,0,0)); 
+    strip.setPixelColor(i, strip.Color(0, 0, 0));
   }
   strip.show();
 }
